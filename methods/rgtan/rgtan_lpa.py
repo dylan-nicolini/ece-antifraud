@@ -47,6 +47,6 @@ def load_lpa_subtensor(
 
     batch_labels = labels[seeds].to(device)
     train_labels = copy.deepcopy(labels)
-    propagate_labels = train_labels[input_nodes]  # (|input_nodes|,) 45324
+    propagate_labels = labels[input_nodes].clone()
     propagate_labels[:seeds.shape[0]] = 2
-    return batch_inputs, batch_work_inputs, batch_neighstat_inputs, batch_labels, propagate_labels.to(device)
+    return batch_inputs, batch_work_inputs, batch_neighstat_inputs, batch_labels, propagate_labels
