@@ -14,11 +14,37 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.metrics import precision_recall_curve, roc_curve
+from sklearn.metrics import average_precision_score, f1_score, roc_auc_score
 from scipy.io import loadmat
 from tqdm import tqdm
 from . import *
 from .rgtan_lpa import load_lpa_subtensor
 from .rgtan_model import RGTAN
+
+def dump_metric_inputs(run_tag: str, y_true: np.ndarray, y_score: np.ndarray, y_pred: np.ndarray):
+    os.makedirs("artifacts", exist_ok=True)
+
+    # Save the exact arrays that feed AP/AUC/F1
+    path = f"artifacts/metric_inputs_{run_tag}.npz"
+    np.savez_compressed(path, y_true=y_true, y_score=y_score, y_pred=y_pred)
+
+    # Confusion components (drives F1)
+    tp = int(((y_true == 1) & (y_pred == 1)).sum())
+    fp = int(((y_true == 0) & (y_pred == 1)).sum())
+    tn = int(((y_true == 0) & (y_pred == 0)).sum())
+    fn = int(((y_true == 1) & (y_pred == 0)).sum())
+
+    # Also write a human-readable summary
+    txt_path = f"artifacts/metric_inputs_{run_tag}.txt"
+    with open(txt_path, "w") as f:
+        f.write(f"n={len(y_true)} pos={int((y_true==1).sum())} neg={int((y_true==0).sum())}\n")
+        f.write(f"TP={tp} FP={fp} TN={tn} FN={fn}\n")
+        f.write("First 20 rows (y_true, y_score, y_pred):\n")
+        for i in range(min(20, len(y_true))):
+            f.write(f"{i}: {int(y_true[i])}, {float(y_score[i]):.6f}, {int(y_pred[i])}\n")
+
+    print(f"[metric dump] wrote: {path}")
+    print(f"[metric dump] wrote: {txt_path}")
 
 def log_epoch_metrics(experiment, fold: int, epoch: int, metrics: dict):
     if not experiment:
@@ -43,7 +69,7 @@ def log_test_inputs_and_counts(experiment, y_true, y_score, y_pred, run_tag: str
         y_score=y_score.astype(np.float32),
         y_pred=y_pred.astype(np.int64),
     )
-    experiment.log_asset(arr_path, asset_type="test_inputs")
+    experiment.log_asset(arr_path)
 
     # Confusion counts (these are the “numbers” that drive F1)
     tp = int(((y_true == 1) & (y_pred == 1)).sum())
@@ -70,7 +96,8 @@ def log_test_inputs_and_counts(experiment, y_true, y_score, y_pred, run_tag: str
         precision=prec, recall=rec, pr_thresholds=pr_thresh,
         fpr=fpr, tpr=tpr, roc_thresholds=roc_thresh
     )
-    experiment.log_asset(curves_path, asset_type="curves")
+    experiment.log_asset(curves_path)
+    # experiment.log_asset(curves_path, asset_type="curves")
 
 def rgtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, neigh_features: pd.DataFrame, nei_att_head, experiment=None):
     
@@ -182,14 +209,16 @@ def rgtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, 
                 lr_scheduler.step()
                 train_loss_list.append(train_loss.cpu().detach().numpy())
 
+                score = torch.softmax(train_batch_logits.detach(), dim=1)[:, 1].cpu().numpy()
+                train_probs_all.append(score)
+                train_labels_all.append(batch_labels.detach().cpu().numpy())
+
                 if step % 10 == 0:
                     tr_batch_pred = torch.sum(torch.argmax(train_batch_logits.clone(
                     ).detach(), dim=1) == batch_labels) / batch_labels.shape[0]
                     score = torch.softmax(train_batch_logits.clone().detach(), dim=1)[
                         :, 1].cpu().numpy()
                     
-                    train_probs_all.append(score)
-                    train_labels_all.append(batch_labels.detach().cpu().numpy())
 
                     try:
                         print('In epoch:{:03d}|batch:{:04d}, train_loss:{:4f}, '
@@ -220,10 +249,25 @@ def rgtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, 
                     blocks = [block.to(device) for block in blocks]
                     val_batch_logits = model(
                         blocks, batch_inputs, lpa_labels, batch_work_inputs, batch_neighstat_inputs)
+                    
+                    # score = torch.softmax(val_batch_logits.detach(), dim=1)[:, 1].cpu().numpy()
+                    # val_probs_all.append(score)
+                    # val_labels_all.append(batch_labels.detach().cpu().numpy())
+
+                    # oof_predictions[seeds] = val_batch_logits
+                    # mask = batch_labels == 2
+                    # val_batch_logits = val_batch_logits[~mask]
+                    # batch_labels = batch_labels[~mask]
+                    
                     oof_predictions[seeds] = val_batch_logits
                     mask = batch_labels == 2
                     val_batch_logits = val_batch_logits[~mask]
                     batch_labels = batch_labels[~mask]
+
+                    score = torch.softmax(val_batch_logits.detach(), dim=1)[:, 1].cpu().numpy()
+                    val_probs_all.append(score)
+                    val_labels_all.append(batch_labels.detach().cpu().numpy())
+
                     # batch_labels[mask] = 0
                     val_loss_list = val_loss_list + \
                         loss_fn(val_batch_logits, batch_labels)
@@ -239,8 +283,6 @@ def rgtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, 
                         score = torch.softmax(val_batch_logits.clone().detach(), dim=1)[
                             :, 1].cpu().numpy()
                         
-                        val_probs_all.append(score)
-                        val_labels_all.append(batch_labels.detach().cpu().numpy())
 
                         try:
                             print('In epoch:{:03d}|batch:{:04d}, val_loss:{:4f}, val_ap:{:.4f}, '
@@ -257,8 +299,58 @@ def rgtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, 
             # val_acc_list/val_all_list, model)
             earlystoper.earlystop(val_loss_list/val_all_list, model)
 
-            val_probs_all.append(score)
-            val_labels_all.append(batch_labels.detach().cpu().numpy())
+            # ---- Epoch-level Comet logging (RGTAN) ----
+            if experiment:
+                # ----- TRAIN METRICS -----
+                if len(train_probs_all) > 0:
+                    tr_scores = np.concatenate(train_probs_all)
+                    tr_true = np.concatenate(train_labels_all)
+
+                    try:
+                        tr_auc = roc_auc_score(tr_true, tr_scores)
+                    except Exception:
+                        tr_auc = float("nan")
+
+                    try:
+                        tr_ap = average_precision_score(tr_true, tr_scores)
+                    except Exception:
+                        tr_ap = float("nan")
+                else:
+                    tr_auc, tr_ap = float("nan"), float("nan")
+
+                # ----- VALIDATION METRICS -----
+                if len(val_probs_all) > 0:
+                    va_scores = np.concatenate(val_probs_all)
+                    va_true = np.concatenate(val_labels_all)
+
+                    try:
+                        va_auc = roc_auc_score(va_true, va_scores)
+                    except Exception:
+                        va_auc = float("nan")
+
+                    try:
+                        va_ap = average_precision_score(va_true, va_scores)
+                    except Exception:
+                        va_ap = float("nan")
+                else:
+                    va_auc, va_ap = float("nan"), float("nan")
+
+                # ----- LOG TO COMET -----
+                log_epoch_metrics(
+                    experiment,
+                    fold=fold + 1,
+                    epoch=epoch,
+                    metrics={
+                        "train/loss_mean": float(np.mean(train_loss_list)) if len(train_loss_list) else float("nan"),
+                        "train/ap_epoch": float(tr_ap),
+                        "train/auc_epoch": float(tr_auc),
+                        "val/loss_epoch": float((val_loss_list / val_all_list).detach().cpu().item()),
+                        "val/ap_epoch": float(va_ap),
+                        "val/auc_epoch": float(va_auc),
+                        "val/earlystop_best": float(earlystoper.best_cv),
+                    }
+                )
+            # ---- End epoch-level logging ----
 
             if earlystoper.is_earlystop:
                 print("Early Stopping!")
@@ -292,11 +384,21 @@ def rgtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, 
                     test_batch_logits, dim=1) == batch_labels) / torch.tensor(batch_labels.shape[0])
                 if step % 10 == 0:
                     print('In test batch:{:04d}'.format(step))
-    mask = y_target == 2
-    y_target[mask] = 0
-    my_ap = average_precision_score(y_target, torch.softmax(
-        oof_predictions, dim=1).cpu()[train_idx, 1])
+    # mask = y_target == 2
+    # y_target[mask] = 0
+    # my_ap = average_precision_score(y_target, torch.softmax(
+    #     oof_predictions, dim=1).cpu()[train_idx, 1])
+    
+    y_oof = labels[train_idx].cpu().numpy()
+    y_oof = np.where(y_oof == 2, 0, y_oof)
+
+    my_ap = average_precision_score(
+        y_oof,
+        torch.softmax(oof_predictions, dim=1).cpu().numpy()[train_idx, 1]
+)
+
     print("NN out of fold AP is:", my_ap)
+
     b_models, val_gnn_0, test_gnn_0 = earlystoper.best_model.to(
         'cpu'), oof_predictions, test_predictions
 
@@ -308,6 +410,9 @@ def rgtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, 
     test_score = test_score[mask]
     y_target = y_target[mask]
     test_score1 = test_score1[mask]
+
+    run_tag = f"{args['method']}_{args['dataset']}"
+    dump_metric_inputs(run_tag, y_target, test_score, test_score1)
 
     print("test AUC:", roc_auc_score(y_target, test_score))
     print("test f1:", f1_score(y_target, test_score1, average="macro"))

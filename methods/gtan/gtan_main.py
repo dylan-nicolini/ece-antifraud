@@ -17,6 +17,31 @@ from torch.optim.lr_scheduler import MultiStepLR
 from .gtan_model import GraphAttnModel
 from . import *
 
+def dump_metric_inputs(run_tag: str, y_true: np.ndarray, y_score: np.ndarray, y_pred: np.ndarray):
+    os.makedirs("artifacts", exist_ok=True)
+
+    # Save the exact arrays that feed AP/AUC/F1
+    path = f"artifacts/metric_inputs_{run_tag}.npz"
+    np.savez_compressed(path, y_true=y_true, y_score=y_score, y_pred=y_pred)
+
+    # Confusion components (drives F1)
+    tp = int(((y_true == 1) & (y_pred == 1)).sum())
+    fp = int(((y_true == 0) & (y_pred == 1)).sum())
+    tn = int(((y_true == 0) & (y_pred == 0)).sum())
+    fn = int(((y_true == 1) & (y_pred == 0)).sum())
+
+    # Also write a human-readable summary
+    txt_path = f"artifacts/metric_inputs_{run_tag}.txt"
+    with open(txt_path, "w") as f:
+        f.write(f"n={len(y_true)} pos={int((y_true==1).sum())} neg={int((y_true==0).sum())}\n")
+        f.write(f"TP={tp} FP={fp} TN={tn} FN={fn}\n")
+        f.write("First 20 rows (y_true, y_score, y_pred):\n")
+        for i in range(min(20, len(y_true))):
+            f.write(f"{i}: {int(y_true[i])}, {float(y_score[i]):.6f}, {int(y_pred[i])}\n")
+
+    print(f"[metric dump] wrote: {path}")
+    print(f"[metric dump] wrote: {txt_path}")
+
 def log_epoch_metrics(experiment, fold: int, epoch: int, metrics: dict):
     if not experiment:
         return
@@ -40,7 +65,7 @@ def log_test_inputs_and_counts(experiment, y_true, y_score, y_pred, run_tag: str
         y_score=y_score.astype(np.float32),
         y_pred=y_pred.astype(np.int64),
     )
-    experiment.log_asset(arr_path, asset_type="test_inputs")
+    experiment.log_asset(arr_path)
 
     # Confusion counts (these are the “numbers” that drive F1)
     tp = int(((y_true == 1) & (y_pred == 1)).sum())
@@ -67,7 +92,7 @@ def log_test_inputs_and_counts(experiment, y_true, y_score, y_pred, run_tag: str
         precision=prec, recall=rec, pr_thresholds=pr_thresh,
         fpr=fpr, tpr=tpr, roc_thresholds=roc_thresh
     )
-    experiment.log_asset(curves_path, asset_type="curves")
+    experiment.log_asset(curves_path)
 
 def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, experiment=None):
     
@@ -229,7 +254,7 @@ def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, e
                     val_probs_all.append(score)
                     val_labels_all.append(batch_labels.detach().cpu().numpy())
 
-                    
+
                     if step % 10 == 0:
 
 
@@ -344,6 +369,9 @@ def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, e
     test_score = test_score[mask]
     y_target = y_target[mask]
     test_score1 = test_score1[mask]
+
+    run_tag = f"{args['method']}_{args['dataset']}"
+    dump_metric_inputs(run_tag, y_target, test_score, test_score1)
 
     print("test AUC:", roc_auc_score(y_target, test_score))
     print("test f1:", f1_score(y_target, test_score1, average="macro"))
