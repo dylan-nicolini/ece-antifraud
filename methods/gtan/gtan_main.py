@@ -17,6 +17,15 @@ from torch.optim.lr_scheduler import MultiStepLR
 from .gtan_model import GraphAttnModel
 from . import *
 
+def log_epoch_metrics(experiment, fold: int, epoch: int, metrics: dict):
+    if not experiment:
+        return
+    # fold is 1-based in logs for readability
+    metrics = dict(metrics)
+    metrics["fold"] = int(fold)
+    metrics["epoch"] = int(epoch)
+    experiment.log_metrics(metrics, step=epoch)
+
 def log_test_inputs_and_counts(experiment, y_true, y_score, y_pred, run_tag: str):
     if not experiment:
         return
@@ -132,6 +141,10 @@ def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, e
         start_epoch, max_epochs = 0, 2000
         for epoch in range(start_epoch, args['max_epochs']):
             train_loss_list = []
+
+            train_probs_all = []
+            train_labels_all = []
+
             # train_acc_list = []
             model.train()
             for step, (input_nodes, seeds, blocks) in enumerate(train_dataloader):
@@ -154,12 +167,17 @@ def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, e
                 lr_scheduler.step()
                 train_loss_list.append(train_loss.cpu().detach().numpy())
 
+                score = torch.softmax(train_batch_logits.detach(), dim=1)[:, 1].cpu().numpy()
+                train_probs_all.append(score)
+                train_labels_all.append(batch_labels.detach().cpu().numpy())
+                
                 if step % 10 == 0:
                     tr_batch_pred = torch.sum(torch.argmax(train_batch_logits.clone(
                     ).detach(), dim=1) == batch_labels) / batch_labels.shape[0]
                     score = torch.softmax(train_batch_logits.clone().detach(), dim=1)[
                         :, 1].cpu().numpy()
 
+                
                     # if (len(np.unique(score)) == 1):
                     #     print("all same prediction!")
                     try:
@@ -179,6 +197,10 @@ def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, e
             val_acc_list = 0
             val_all_list = 0
             model.eval()
+
+            val_probs_all = []
+            val_labels_all = []
+
             with torch.no_grad():
                 for step, (input_nodes, seeds, blocks) in enumerate(val_dataloader):
                     batch_inputs, batch_work_inputs, batch_labels, lpa_labels = load_lpa_subtensor(num_feat, cat_feat, labels,
@@ -200,9 +222,17 @@ def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, e
                     val_acc_list = val_acc_list + val_batch_pred * \
                         torch.tensor(batch_labels.shape[0])
                     val_all_list = val_all_list + batch_labels.shape[0]
+
+                    score = torch.softmax(val_batch_logits.clone().detach(), dim=1)[
+                    :, 1].cpu().numpy()
+
+                    val_probs_all.append(score)
+                    val_labels_all.append(batch_labels.detach().cpu().numpy())
+
+                    
                     if step % 10 == 0:
-                        score = torch.softmax(val_batch_logits.clone().detach(), dim=1)[
-                            :, 1].cpu().numpy()
+
+
                         try:
                             print('In epoch:{:03d}|batch:{:04d}, val_loss:{:4f}, val_ap:{:.4f}, '
                                   'val_acc:{:.4f}, val_auc:{:.4f}'.format(epoch,
@@ -217,6 +247,55 @@ def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, e
 
             # val_acc_list/val_all_list, model)
             earlystoper.earlystop(val_loss_list/val_all_list, model)
+
+            # ---- Epoch-level Comet logging (GTAN) ----
+            if experiment:
+                # flatten arrays
+                if len(train_probs_all) > 0:
+                    tr_scores = np.concatenate(train_probs_all)
+                    tr_true = np.concatenate(train_labels_all)
+                    # guard for edge-case: only one class in a minibatch epoch slice
+                    try:
+                        tr_auc = roc_auc_score(tr_true, tr_scores)
+                    except Exception:
+                        tr_auc = float("nan")
+                    try:
+                        tr_ap = average_precision_score(tr_true, tr_scores)
+                    except Exception:
+                        tr_ap = float("nan")
+                else:
+                    tr_auc, tr_ap = float("nan"), float("nan")
+
+                if len(val_probs_all) > 0:
+                    va_scores = np.concatenate(val_probs_all)
+                    va_true = np.concatenate(val_labels_all)
+                    try:
+                        va_auc = roc_auc_score(va_true, va_scores)
+                    except Exception:
+                        va_auc = float("nan")
+                    try:
+                        va_ap = average_precision_score(va_true, va_scores)
+                    except Exception:
+                        va_ap = float("nan")
+                else:
+                    va_auc, va_ap = float("nan"), float("nan")
+
+                log_epoch_metrics(
+                    experiment,
+                    fold=fold + 1,
+                    epoch=epoch,
+                    metrics={
+                        "train/loss_mean": float(np.mean(train_loss_list)) if len(train_loss_list) else float("nan"),
+                        "train/ap_epoch": float(tr_ap),
+                        "train/auc_epoch": float(tr_auc),
+                        "val/loss_epoch": float((val_loss_list / val_all_list).detach().cpu().item()),
+                        "val/ap_epoch": float(va_ap),
+                        "val/auc_epoch": float(va_auc),
+                        "val/earlystop_best": float(earlystoper.best_cv),
+                    }
+                )
+            # ---- End epoch-level logging ----
+
             if earlystoper.is_earlystop:
                 print("Early Stopping!")
                 break

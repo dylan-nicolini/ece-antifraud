@@ -20,6 +20,15 @@ from . import *
 from .rgtan_lpa import load_lpa_subtensor
 from .rgtan_model import RGTAN
 
+def log_epoch_metrics(experiment, fold: int, epoch: int, metrics: dict):
+    if not experiment:
+        return
+    # fold is 1-based in logs for readability
+    metrics = dict(metrics)
+    metrics["fold"] = int(fold)
+    metrics["epoch"] = int(epoch)
+    experiment.log_metrics(metrics, step=epoch)
+
 def log_test_inputs_and_counts(experiment, y_true, y_score, y_pred, run_tag: str):
     if not experiment:
         return
@@ -143,6 +152,10 @@ def rgtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, 
         start_epoch, max_epochs = 0, 2000
         for epoch in range(start_epoch, args['max_epochs']):
             train_loss_list = []
+
+            train_probs_all = []
+            train_labels_all = []
+
             # train_acc_list = []
             model.train()
             for step, (input_nodes, seeds, blocks) in enumerate(train_dataloader):
@@ -174,6 +187,10 @@ def rgtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, 
                     ).detach(), dim=1) == batch_labels) / batch_labels.shape[0]
                     score = torch.softmax(train_batch_logits.clone().detach(), dim=1)[
                         :, 1].cpu().numpy()
+                    
+                    train_probs_all.append(score)
+                    train_labels_all.append(batch_labels.detach().cpu().numpy())
+
                     try:
                         print('In epoch:{:03d}|batch:{:04d}, train_loss:{:4f}, '
                               'train_ap:{:.4f}, train_acc:{:.4f}, train_auc:{:.4f}'.format(epoch, step,
@@ -191,6 +208,10 @@ def rgtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, 
             val_acc_list = 0
             val_all_list = 0
             model.eval()
+
+            val_probs_all = []
+            val_labels_all = []
+
             with torch.no_grad():
                 for step, (input_nodes, seeds, blocks) in enumerate(val_dataloader):
                     batch_inputs, batch_work_inputs, batch_neighstat_inputs, batch_labels, lpa_labels = load_lpa_subtensor(num_feat, cat_feat, nei_feat, neigh_padding_dict, labels,
@@ -217,6 +238,10 @@ def rgtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, 
                     if step % 10 == 0:
                         score = torch.softmax(val_batch_logits.clone().detach(), dim=1)[
                             :, 1].cpu().numpy()
+                        
+                        val_probs_all.append(score)
+                        val_labels_all.append(batch_labels.detach().cpu().numpy())
+
                         try:
                             print('In epoch:{:03d}|batch:{:04d}, val_loss:{:4f}, val_ap:{:.4f}, '
                                   'val_acc:{:.4f}, val_auc:{:.4f}'.format(epoch,
@@ -231,6 +256,10 @@ def rgtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, 
 
             # val_acc_list/val_all_list, model)
             earlystoper.earlystop(val_loss_list/val_all_list, model)
+
+            val_probs_all.append(score)
+            val_labels_all.append(batch_labels.detach().cpu().numpy())
+
             if earlystoper.is_earlystop:
                 print("Early Stopping!")
                 break
