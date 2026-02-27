@@ -1,4 +1,8 @@
 import os
+
+# IMPORTANT: must be imported before sklearn/torch/etc to enable auto-logging cleanly
+from comet_ml import Experiment
+
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from config import Config
 from feature_engineering.data_engineering import data_engineer_benchmark, span_data_2d, span_data_3d
@@ -75,8 +79,35 @@ def base_load_data(args: dict):
     np.save(tel_file, tel)
     return
 
+def start_comet_experiment(args: dict):
+    # If COMET_API_KEY not set, just run without Comet (no crashes)
+    if not os.getenv("COMET_API_KEY"):
+        return None
+
+    exp = Experiment(
+        project_name=os.getenv("COMET_PROJECT_NAME", "ece-thesis-fraud"),
+        workspace=os.getenv("COMET_WORKSPACE"),
+        auto_param_logging=False,   # you control what is logged
+        auto_metric_logging=False,
+        log_code=True,
+    )
+
+    exp.set_name(f"{args.get('method')}-{args.get('dataset')}")
+    exp.add_tags([args.get("method", "unknown"), args.get("dataset", "unknown")])
+
+    # Log all YAML args as parameters
+    exp.log_parameters(args)
+
+    # Useful extra context
+    exp.log_parameter("device", args.get("device"))
+    exp.log_parameter("n_fold", args.get("n_fold"))
+    exp.log_parameter("max_epochs", args.get("max_epochs"))
+    return exp
 
 def main(args):
+
+    experiment = start_comet_experiment(args)
+
     if args['method'] == 'mcnn':
         from methods.mcnn.mcnn_main import mcnn_main
         base_load_data(args)
@@ -140,13 +171,13 @@ def main(args):
         feat_data, labels, train_idx, test_idx, g, cat_features = load_gtan_data(
             args['dataset'], args['test_size'])
         gtan_main(
-            feat_data, g, train_idx, test_idx, labels, args, cat_features)
+            feat_data, g, train_idx, test_idx, labels, args, cat_features, experiment=experiment)
     elif args['method'] == 'rgtan':
         from methods.rgtan.rgtan_main import rgtan_main, loda_rgtan_data
         feat_data, labels, train_idx, test_idx, g, cat_features, neigh_features = loda_rgtan_data(
             args['dataset'], args['test_size'])
         rgtan_main(feat_data, g, train_idx, test_idx, labels, args,
-                   cat_features, neigh_features, nei_att_head=args['nei_att_heads'][args['dataset']])
+                   cat_features, neigh_features, nei_att_head=args['nei_att_heads'][args['dataset']], experiment=experiment)
     elif args['method'] == 'hogrl':
         from methods.hogrl.hogrl_main import hogrl_main
         hogrl_main(args)

@@ -8,6 +8,7 @@ from scipy.io import loadmat
 import pandas as pd
 import pickle
 from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.metrics import precision_recall_curve, roc_curve
 import torch.nn as nn
 from sklearn.preprocessing import LabelEncoder, QuantileTransformer
 from dgl.dataloading import MultiLayerFullNeighborSampler
@@ -16,8 +17,53 @@ from torch.optim.lr_scheduler import MultiStepLR
 from .gtan_model import GraphAttnModel
 from . import *
 
+def log_test_inputs_and_counts(experiment, y_true, y_score, y_pred, run_tag: str):
+    if not experiment:
+        return
 
-def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features):
+    os.makedirs("artifacts", exist_ok=True)
+
+    # Save raw arrays used by roc_auc_score / average_precision_score / f1_score
+    arr_path = f"artifacts/test_inputs_{run_tag}.npz"
+    np.savez_compressed(
+        arr_path,
+        y_true=y_true.astype(np.int64),
+        y_score=y_score.astype(np.float32),
+        y_pred=y_pred.astype(np.int64),
+    )
+    experiment.log_asset(arr_path, asset_type="test_inputs")
+
+    # Confusion counts (these are the “numbers” that drive F1)
+    tp = int(((y_true == 1) & (y_pred == 1)).sum())
+    fp = int(((y_true == 0) & (y_pred == 1)).sum())
+    tn = int(((y_true == 0) & (y_pred == 0)).sum())
+    fn = int(((y_true == 1) & (y_pred == 0)).sum())
+
+    experiment.log_metrics({
+        "test/tp": tp,
+        "test/fp": fp,
+        "test/tn": tn,
+        "test/fn": fn,
+        "test/n": int(len(y_true)),
+        "test/pos_rate": float((y_true == 1).mean()),
+    })
+
+    # Curves used for AP (PR curve) and AUC (ROC curve)
+    prec, rec, pr_thresh = precision_recall_curve(y_true, y_score)
+    fpr, tpr, roc_thresh = roc_curve(y_true, y_score)
+
+    curves_path = f"artifacts/test_curves_{run_tag}.npz"
+    np.savez_compressed(
+        curves_path,
+        precision=prec, recall=rec, pr_thresholds=pr_thresh,
+        fpr=fpr, tpr=tpr, roc_thresholds=roc_thresh
+    )
+    experiment.log_asset(curves_path, asset_type="curves")
+
+def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, experiment=None):
+    
+    global_step = 0   # <---- put it here
+
     device = args['device']
     graph = graph.to(device)
     oof_predictions = torch.from_numpy(
@@ -224,6 +270,9 @@ def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features):
     print("test f1:", f1_score(y_target, test_score1, average="macro"))
     print("test AP:", average_precision_score(y_target, test_score))
 
+    if experiment:
+        run_tag = f"{args['method']}_{args['dataset']}"
+        log_test_inputs_and_counts(experiment, y_target, test_score, test_score1, run_tag)
 
 def load_gtan_data(dataset: str, test_size: float):
     """
