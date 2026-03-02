@@ -373,6 +373,11 @@ def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, e
     run_tag = f"{args['method']}_{args['dataset']}"
     dump_metric_inputs(run_tag, y_target, test_score, test_score1)
 
+    print("-------------------------------------------------------")
+    print("test score : ", test_score)
+    print("test score 1: ", test_score1)
+    print("-------------------------------------------------------")
+    
     print("test AUC:", roc_auc_score(y_target, test_score))
     print("test f1:", f1_score(y_target, test_score1, average="macro"))
     print("test AP:", average_precision_score(y_target, test_score))
