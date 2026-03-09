@@ -353,8 +353,12 @@ def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, e
                     test_batch_logits, dim=1) == batch_labels) / torch.tensor(batch_labels.shape[0])
                 if step % 10 == 0:
                     print('In test batch:{:04d}'.format(step))
+    
+    #converts 2-class to 0
     mask = y_target == 2
     y_target[mask] = 0
+
+
     my_ap = average_precision_score(y_target, torch.softmax(
         oof_predictions, dim=1).cpu()[train_idx, 1])
     print("NN out of fold AP is:", my_ap)
@@ -364,6 +368,9 @@ def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, e
     test_score = torch.softmax(test_gnn_0, dim=1)[test_idx, 1].cpu().numpy()
     y_target = labels[test_idx].cpu().numpy()
     test_score1 = torch.argmax(test_gnn_0, dim=1)[test_idx].cpu().numpy()
+
+    # Print statement for debugging - check for presence of class 2 in test set
+    print("Unique classes in test set before filtering:", np.unique(y_target))
 
     mask = y_target != 2
     test_score = test_score[mask]
