@@ -380,6 +380,19 @@ def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, e
     run_tag = f"{args['method']}_{args['dataset']}"
     dump_metric_inputs(run_tag, y_target, test_score, test_score1)
 
+    # ── Write probabilities for AUC graphing (NPZ + CSV) ─────────────────────
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    artifacts_dir = os.path.join(BASE_DIR, "artifacts")
+    os.makedirs(artifacts_dir, exist_ok=True)
+
+    npz_path = os.path.join(artifacts_dir, f"curves_{run_tag}.npz")
+    np.savez_compressed(npz_path, y_true=y_target, y_score=test_score)
+    print(f"NPZ saved  → {npz_path}")
+
+    csv_path = os.path.join(artifacts_dir, f"curves_{run_tag}.csv")
+    pd.DataFrame({'y_true': y_target, 'y_prob': test_score}).to_csv(csv_path, index=False)
+    print(f"CSV saved  → {csv_path}")
+
     print("-------------------------------------------------------")
     print("test score : ", test_score)
     print("test score 1: ", test_score1)
