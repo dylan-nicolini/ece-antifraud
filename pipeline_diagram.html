@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>ECE Anti-Fraud Pipeline</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f172a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      padding: 40px 20px;
+    }
+
+    h1 {
+      color: #f8fafc;
+      font-size: 1.6rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      margin-bottom: 6px;
+      text-align: center;
+    }
+
+    p.subtitle {
+      color: #94a3b8;
+      font-size: 0.85rem;
+      margin-bottom: 32px;
+      text-align: center;
+    }
+
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 16px;
+      padding: 40px 48px;
+      box-shadow: 0 25px 60px rgba(0,0,0,0.5);
+      max-width: 1100px;
+      width: 100%;
+    }
+
+    .mermaid {
+      display: flex;
+      justify-content: center;
+    }
+
+    .export-hint {
+      margin-top: 24px;
+      color: #64748b;
+      font-size: 0.78rem;
+      text-align: center;
+    }
+
+    kbd {
+      background: #334155;
+      color: #e2e8f0;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 0.75rem;
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body>
+
+<h1>ECE Anti-Fraud · GTAN Pipeline</h1>
+<p class="subtitle">Data flow from raw CSV through feature engineering to model training</p>
+
+<div class="card">
+  <div class="mermaid">
+flowchart TD
+    A@{ shape: cylinder, label: "📄 S-FFSD.csv\n─────────────────\nTime · Source · Target\nAmount · Location · Type · Labels\n7 raw columns" }
+
+    subgraph FE["🔧  Feature Engineering"]
+        direction TB
+        B@{ shape: rounded, label: "Temporal Features\nfeatmap_gen / featmap_gen_v3\n─────────────────────────────\n5 stats × 15 time windows\navg · total · std · bias · count" }
+        C@{ shape: rounded, label: "Graph Construction\nForward temporal edges per entity\nedge_per_trans = 3" }
+        D@{ shape: rounded, label: "Label Encoding\nSource · Target · Location · Type" }
+        B --> C --> D
+    end
+
+    subgraph OUT["📦  Outputs"]
+        direction LR
+        E@{ shape: cylinder, label: "📊 S-FFSDneofull.csv\n~82 feature columns" }
+        F@{ shape: cylinder, label: "🕸️ graph-S-FFSD.bin\nDGL graph" }
+        G@{ shape: cylinder, label: "🔗 S-FFSD_neigh_feat.csv\ndegree · riskstat\n1-hop / 2-hop\nRGTAN only" }
+    end
+
+    subgraph GTAN["🧠  GTAN Training"]
+        direction TB
+        H@{ shape: rounded, label: "load_gtan_data\nRead CSV · Rebuild graph\nStratified train / test split" }
+
+        subgraph INP["Model Inputs"]
+            direction LR
+            I@{ shape: rect, label: "🔢 batch_inputs\nNumeric features\nFloatTensor  B × 82" }
+            J@{ shape: rect, label: "🏷️ batch_work_inputs\nTarget · Location · Type\nDict of LongTensors" }
+            K@{ shape: rect, label: "🎯 lpa_labels\n0 legit · 1 fraud · 2 unknown\nLongTensor  B" }
+            L@{ shape: rect, label: "🕸️ blocks\nSampled subgraphs\nn_layers = 2" }
+        end
+
+        M@{ shape: stadium, label: "⚡ GTAN forward\nGraph attention + label propagation" }
+        N@{ shape: cylinder, label: "📈 Results CSV\ny_true · y_prob" }
+
+        H --> I & J & K & L --> M --> N
+    end
+
+    A --> FE
+    FE --> E & F & G
+    E -->|"read-only"| H
+
+    style A       fill:#1e40af,stroke:#3b82f6,color:#eff6ff
+    style FE      fill:#1c1917,stroke:#d97706,color:#fef3c7
+    style B       fill:#292524,stroke:#d97706,color:#fde68a
+    style C       fill:#292524,stroke:#d97706,color:#fde68a
+    style D       fill:#292524,stroke:#d97706,color:#fde68a
+    style OUT     fill:#052e16,stroke:#16a34a,color:#dcfce7
+    style E       fill:#14532d,stroke:#22c55e,color:#f0fdf4
+    style F       fill:#14532d,stroke:#22c55e,color:#f0fdf4
+    style G       fill:#1c1917,stroke:#57534e,color:#a8a29e
+    style GTAN    fill:#2e1065,stroke:#a855f7,color:#f5f3ff
+    style INP     fill:#1a0533,stroke:#7c3aed,color:#ede9fe
+    style I       fill:#3b0764,stroke:#a855f7,color:#f3e8ff
+    style J       fill:#3b0764,stroke:#a855f7,color:#f3e8ff
+    style K       fill:#3b0764,stroke:#a855f7,color:#f3e8ff
+    style L       fill:#3b0764,stroke:#a855f7,color:#f3e8ff
+    style H       fill:#4a1d96,stroke:#7c3aed,color:#ede9fe
+    style M       fill:#6d28d9,stroke:#a855f7,color:#ffffff
+    style N       fill:#14532d,stroke:#22c55e,color:#f0fdf4
+  </div>
+</div>
+
+<p class="export-hint">
+  To export: <kbd>Ctrl+Shift+P</kbd> → "Screenshot" in Edge/Chrome DevTools &nbsp;|&nbsp;
+  or <kbd>Ctrl+P</kbd> → Save as PDF &nbsp;|&nbsp;
+  or right-click the diagram → Inspect → Screenshot node
+</p>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      fontSize: '15px',
+      fontFamily: "'Segoe UI', system-ui, sans-serif",
+      lineColor: '#64748b',
+      primaryColor: '#1e293b',
+      edgeLabelBackground: '#1e293b',
+    },
+    flowchart: {
+      curve: 'basis',
+      padding: 20,
+    }
+  });
+</script>
+
+</body>
+</html>
