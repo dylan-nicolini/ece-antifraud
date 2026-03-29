@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 ###############################################################################
-# package_experiment.sh
+# archive_experiment_data.sh
 #
 # Purpose:
 #   Create an experiment package under:
@@ -20,27 +20,33 @@ set -Eeuo pipefail
 #
 #   Validate everything copied correctly.
 #   Zip the entire experiment folder.
+#   Optionally upload the zip to S3 via AWS CLI.
 #   Leave copied files in place.
 #   Optionally clean up original source files at the very end.
 #
 # Usage:
 #   Dry run:
-#     ./package_experiment.sh --dry-run --experiment-name exp01_gtan
+#     ./archive_experiment_data.sh --dry-run --experiment-name exp01_gtan
 #
 #   Package only:
-#     ./package_experiment.sh --experiment-name exp01_gtan
+#     ./archive_experiment_data.sh --experiment-name exp01_gtan
 #
-#   Package + cleanup originals after success:
-#     ./package_experiment.sh --experiment-name exp01_gtan --cleanup-sources
+#   Package + upload to S3:
+#     ./archive_experiment_data.sh --experiment-name exp01_gtan --upload-to-s3
+#
+#   Package + upload + cleanup originals:
+#     ./archive_experiment_data.sh --experiment-name exp01_gtan --upload-to-s3 --cleanup-sources
 ###############################################################################
 
 DRY_RUN=false
 CLEANUP_SOURCES=false
+UPLOAD_TO_S3=false
 EXPERIMENT_NAME=""
 
 EXPERIMENTS_ROOT="${HOME}/ece-antifraud/experiments"
 ARTIFACTS_SOURCE_DIR="${HOME}/ece-antifraud/methods/gtan/artifacts"
 DATA_SOURCE_DIR="${HOME}/ece-antifraud/data"
+S3_BASE_URI="s3://cc-fraud-storage/experiment-data"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -52,13 +58,17 @@ while [[ $# -gt 0 ]]; do
       CLEANUP_SOURCES=true
       shift
       ;;
+    --upload-to-s3)
+      UPLOAD_TO_S3=true
+      shift
+      ;;
     --experiment-name)
       EXPERIMENT_NAME="${2:-}"
       shift 2
       ;;
     *)
       echo "ERROR: Unknown argument: $1"
-      echo "Usage: $0 [--dry-run] [--cleanup-sources] --experiment-name <experiment_name>"
+      echo "Usage: $0 [--dry-run] [--upload-to-s3] [--cleanup-sources] --experiment-name <experiment_name>"
       exit 1
       ;;
   esac
@@ -66,7 +76,7 @@ done
 
 if [[ -z "$EXPERIMENT_NAME" ]]; then
   echo "ERROR: --experiment-name is required"
-  echo "Usage: $0 [--dry-run] [--cleanup-sources] --experiment-name <experiment_name>"
+  echo "Usage: $0 [--dry-run] [--upload-to-s3] [--cleanup-sources] --experiment-name <experiment_name>"
   exit 1
 fi
 
@@ -82,6 +92,23 @@ fi
 
 if [[ ! -d "$DATA_SOURCE_DIR" ]]; then
   echo "ERROR: Data source directory does not exist: $DATA_SOURCE_DIR"
+  exit 1
+fi
+
+if [[ "$UPLOAD_TO_S3" == true ]]; then
+  if ! command -v aws >/dev/null 2>&1; then
+    echo "ERROR: aws CLI is not installed or not in PATH."
+    exit 1
+  fi
+fi
+
+if ! command -v zip >/dev/null 2>&1; then
+  echo "ERROR: zip is not installed or not in PATH."
+  exit 1
+fi
+
+if ! command -v zipinfo >/dev/null 2>&1; then
+  echo "ERROR: zipinfo is not installed or not in PATH."
   exit 1
 fi
 
@@ -130,7 +157,6 @@ cleanup_on_error() {
 }
 trap cleanup_on_error ERR
 
-# Build source file lists
 find "$ARTIFACTS_SOURCE_DIR" -maxdepth 1 -type f \( \
     -iname '*.csv' -o \
     -iname '*.npz' \
@@ -155,12 +181,16 @@ log_console "============================================================"
 log_console "STARTING EXPERIMENT PACKAGING"
 log_console "Mode                : $([[ "$DRY_RUN" == true ]] && echo 'DRY-RUN' || echo 'LIVE')"
 log_console "Cleanup sources     : $([[ "$CLEANUP_SOURCES" == true ]] && echo 'YES' || echo 'NO')"
+log_console "Upload to S3        : $([[ "$UPLOAD_TO_S3" == true ]] && echo 'YES' || echo 'NO')"
 log_console "Experiment name     : $EXPERIMENT_NAME"
 log_console "Experiments root    : $EXPERIMENTS_ROOT"
 log_console "Experiment dir      : $EXPERIMENT_DIR"
 log_console "Zip path            : $ZIP_PATH"
 log_console "Artifacts source    : $ARTIFACTS_SOURCE_DIR"
 log_console "Data source         : $DATA_SOURCE_DIR"
+if [[ "$UPLOAD_TO_S3" == true ]]; then
+  log_console "S3 destination      : ${S3_BASE_URI}/${EXPERIMENT_NAME}.zip"
+fi
 log_console "============================================================"
 
 log_console "Artifacts files found: $ARTIFACT_COUNT"
@@ -187,10 +217,19 @@ if [[ "$DRY_RUN" == true ]]; then
   log "4. Validate every copied file by existence and file size"
   log "5. Create zip: $ZIP_PATH"
   log "6. Validate zip contents"
-  if [[ "$CLEANUP_SOURCES" == true ]]; then
-    log "7. After all validation succeeds, delete original source files"
+  if [[ "$UPLOAD_TO_S3" == true ]]; then
+    log "7. Upload zip to S3: ${S3_BASE_URI}/${EXPERIMENT_NAME}.zip"
+    if [[ "$CLEANUP_SOURCES" == true ]]; then
+      log "8. After S3 validation succeeds, delete original source files"
+    else
+      log "8. Leave original source files untouched"
+    fi
   else
-    log "7. Leave original source files untouched"
+    if [[ "$CLEANUP_SOURCES" == true ]]; then
+      log "7. After validation succeeds, delete original source files"
+    else
+      log "7. Leave original source files untouched"
+    fi
   fi
 
   log "------------------------------------------------------------"
@@ -225,6 +264,13 @@ if [[ "$DRY_RUN" == true ]]; then
   log "WOULD CREATE ZIP: $ZIP_PATH"
   log "WOULD ZIP DIRECTORY: $EXPERIMENT_DIR"
 
+  if [[ "$UPLOAD_TO_S3" == true ]]; then
+    log "------------------------------------------------------------"
+    log "DRY-RUN S3 ACTIONS"
+    log "------------------------------------------------------------"
+    log "WOULD UPLOAD: $ZIP_PATH -> ${S3_BASE_URI}/${EXPERIMENT_NAME}.zip"
+  fi
+
   if [[ "$CLEANUP_SOURCES" == true ]]; then
     log "------------------------------------------------------------"
     log "DRY-RUN CLEANUP ACTIONS"
@@ -241,12 +287,11 @@ if [[ "$DRY_RUN" == true ]]; then
 
   log "------------------------------------------------------------"
   log "DRY-RUN COMPLETE"
-  log "No files were copied, zipped, or deleted."
+  log "No files were copied, zipped, uploaded, or deleted."
   log_console "============================================================"
   exit 0
 fi
 
-# Do not overwrite an existing experiment package
 if [[ -e "$EXPERIMENT_DIR" ]]; then
   echo "ERROR: Experiment directory already exists: $EXPERIMENT_DIR"
   echo "Choose a different --experiment-name or remove the existing folder first."
@@ -259,11 +304,9 @@ if [[ -f "$ZIP_PATH" ]]; then
   exit 1
 fi
 
-# Create folder structure
 mkdir -p "$EXPERIMENT_ARTIFACTS_DIR" "$EXPERIMENT_DATA_DIR" "$EXPERIMENT_LOGS_DIR"
 : > "$LOG_PATH"
 
-# Manifest format: TYPE|SOURCE_PATH|DEST_PATH
 {
   while IFS= read -r src_file; do
     [[ -z "$src_file" ]] && continue
@@ -366,14 +409,6 @@ zipinfo -1 "$ZIP_PATH" | sort > "$TMP_ZIP_LIST"
 cp "$TMP_ZIP_LIST" "$ZIP_LIST_PATH"
 
 ZIP_ENTRY_COUNT="$(wc -l < "$TMP_ZIP_LIST" | tr -d ' ')"
-
-# Expected zip entries:
-# - experiment root dir entry may or may not be counted depending on zip behavior
-# - artifacts/, data/, logs/ dirs may be present
-# - all copied files
-# - log file
-# - manifest
-# At minimum, copied files plus log+manifest should be there
 MIN_EXPECTED_ENTRIES=$((TOTAL_COUNT + 2))
 
 if [[ "$ZIP_ENTRY_COUNT" -lt "$MIN_EXPECTED_ENTRIES" ]]; then
@@ -390,6 +425,26 @@ while IFS= read -r zip_entry; do
   log "  ZIP ENTRY: $zip_entry"
 done < "$ZIP_LIST_PATH"
 
+if [[ "$UPLOAD_TO_S3" == true ]]; then
+  log "------------------------------------------------------------"
+  log "UPLOADING ZIP TO S3"
+  log "------------------------------------------------------------"
+
+  S3_URI="${S3_BASE_URI}/${EXPERIMENT_NAME}.zip"
+  log "S3 destination: $S3_URI"
+
+  aws s3 cp "$ZIP_PATH" "$S3_URI"
+
+  log "S3 upload completed. Verifying uploaded object..."
+
+  aws s3 ls "$S3_URI" >/dev/null 2>&1 || {
+    log "S3 VALIDATION FAILED: Uploaded object not found: $S3_URI"
+    exit 1
+  }
+
+  log "S3 upload validated: $S3_URI"
+fi
+
 log "------------------------------------------------------------"
 log "FINAL PACKAGE SUMMARY"
 log "------------------------------------------------------------"
@@ -397,9 +452,9 @@ log "Experiment directory created : $EXPERIMENT_DIR"
 log "Artifacts package directory  : $EXPERIMENT_ARTIFACTS_DIR"
 log "Data package directory       : $EXPERIMENT_DATA_DIR"
 log "Logs directory               : $EXPERIMENT_LOGS_DIR"
-log "Manifest file               : $MANIFEST_PATH"
-log "Zip listing file            : $ZIP_LIST_PATH"
-log "Zip file                    : $ZIP_PATH"
+log "Manifest file                : $MANIFEST_PATH"
+log "Zip listing file             : $ZIP_LIST_PATH"
+log "Zip file                     : $ZIP_PATH"
 
 if [[ "$CLEANUP_SOURCES" == true ]]; then
   log "------------------------------------------------------------"
@@ -450,5 +505,8 @@ log "EXPERIMENT PACKAGE CREATED SUCCESSFULLY"
 log "Artifacts files found : $ARTIFACT_COUNT"
 log "Data files found      : $DATA_COUNT"
 log "Total files packaged  : $TOTAL_COUNT"
+if [[ "$UPLOAD_TO_S3" == true ]]; then
+  log "S3 upload             : ${S3_BASE_URI}/${EXPERIMENT_NAME}.zip"
+fi
 log "Zip file              : $ZIP_PATH"
 log "============================================================"
