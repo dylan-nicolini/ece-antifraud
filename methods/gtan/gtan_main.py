@@ -487,10 +487,11 @@ def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, e
     test_score = torch.softmax(test_gnn_0, dim=1)[test_idx, 1].cpu().numpy()
     y_target = labels[test_idx].cpu().numpy()
 
-    # 👇 ADD THIS
+    # New line of code for thresholding test_score1
     threshold = 0.30   # <-- start here (try 0.2–0.4)
     test_score1 = (test_score > threshold).astype(int)
 
+    # This was always commented out
     # test_gnn_0[i] = [nonfraud, fraud]
 
     # Print statement for debugging - check for presence of class 2 in test set

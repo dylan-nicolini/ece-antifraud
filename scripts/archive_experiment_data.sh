@@ -15,7 +15,8 @@ set -Eeuo pipefail
 #       logs/
 #
 #   Copy into package:
-#     artifacts/: *.csv, *.npz
+#     artifacts/: recursively include *.csv, *.npz, *.json, *.txt
+#                 while preserving subfolder structure
 #     data/:      *.csv, *.log, *.bin
 #
 #   Validate everything copied correctly.
@@ -157,9 +158,11 @@ cleanup_on_error() {
 }
 trap cleanup_on_error ERR
 
-find "$ARTIFACTS_SOURCE_DIR" -maxdepth 1 -type f \( \
+find "$ARTIFACTS_SOURCE_DIR" -type f \( \
     -iname '*.csv' -o \
-    -iname '*.npz' \
+    -iname '*.npz' -o \
+    -iname '*.json' -o \
+    -iname '*.txt' \
   \) | sort > "$TMP_ARTIFACTS"
 
 find "$DATA_SOURCE_DIR" -maxdepth 1 -type f \( \
@@ -212,7 +215,7 @@ if [[ "$DRY_RUN" == true ]]; then
   log "   $EXPERIMENT_ARTIFACTS_DIR"
   log "   $EXPERIMENT_DATA_DIR"
   log "   $EXPERIMENT_LOGS_DIR"
-  log "2. Copy artifacts (*.csv, *.npz) into artifacts/"
+  log "2. Copy artifacts (*.csv, *.npz, *.json, *.txt) into artifacts/ preserving subfolders"
   log "3. Copy data (*.csv, *.log, *.bin) into data/"
   log "4. Validate every copied file by existence and file size"
   log "5. Create zip: $ZIP_PATH"
@@ -237,7 +240,8 @@ if [[ "$DRY_RUN" == true ]]; then
   log "------------------------------------------------------------"
   while IFS= read -r src_file; do
     [[ -z "$src_file" ]] && continue
-    log "WOULD COPY [ARTIFACT]: $src_file -> ${EXPERIMENT_ARTIFACTS_DIR}/$(basename "$src_file")"
+    rel_path="${src_file#${ARTIFACTS_SOURCE_DIR}/}"
+    log "WOULD COPY [ARTIFACT]: $src_file -> ${EXPERIMENT_ARTIFACTS_DIR}/${rel_path}"
   done < "$TMP_ARTIFACTS"
 
   while IFS= read -r src_file; do
@@ -250,7 +254,8 @@ if [[ "$DRY_RUN" == true ]]; then
   log "------------------------------------------------------------"
   while IFS= read -r src_file; do
     [[ -z "$src_file" ]] && continue
-    log "WOULD VALIDATE [ARTIFACT]: ${EXPERIMENT_ARTIFACTS_DIR}/$(basename "$src_file") (expected size=$(stat -c%s "$src_file") bytes)"
+    rel_path="${src_file#${ARTIFACTS_SOURCE_DIR}/}"
+    log "WOULD VALIDATE [ARTIFACT]: ${EXPERIMENT_ARTIFACTS_DIR}/${rel_path} (expected size=$(stat -c%s "$src_file") bytes)"
   done < "$TMP_ARTIFACTS"
 
   while IFS= read -r src_file; do
@@ -310,7 +315,8 @@ mkdir -p "$EXPERIMENT_ARTIFACTS_DIR" "$EXPERIMENT_DATA_DIR" "$EXPERIMENT_LOGS_DI
 {
   while IFS= read -r src_file; do
     [[ -z "$src_file" ]] && continue
-    echo "ARTIFACT|$src_file|${EXPERIMENT_ARTIFACTS_DIR}/$(basename "$src_file")"
+    rel_path="${src_file#${ARTIFACTS_SOURCE_DIR}/}"
+    echo "ARTIFACT|$src_file|${EXPERIMENT_ARTIFACTS_DIR}/${rel_path}"
   done < "$TMP_ARTIFACTS"
 
   while IFS= read -r src_file; do
@@ -328,6 +334,9 @@ log "------------------------------------------------------------"
 COPIED_COUNT=0
 while IFS='|' read -r file_type src_file dest_file; do
   [[ -z "$src_file" ]] && continue
+
+  dest_dir="$(dirname "$dest_file")"
+  mkdir -p "$dest_dir"
 
   if [[ -e "$dest_file" ]]; then
     log "ERROR: Destination already exists: $dest_file"
