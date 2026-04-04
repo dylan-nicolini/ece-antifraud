@@ -17,6 +17,84 @@ from torch.optim.lr_scheduler import MultiStepLR
 from .gtan_model import GraphAttnModel
 from . import *
 
+import json
+
+def split_stats(labels_np, split_name: str):
+    labels_np = np.asarray(labels_np)
+
+    total = int(len(labels_np))
+    fraud = int((labels_np == 1).sum())
+    nonfraud = int((labels_np == 0).sum())
+    other = int(total - fraud - nonfraud)
+
+    fraud_pct = (fraud / total * 100.0) if total > 0 else 0.0
+    nonfraud_pct = (nonfraud / total * 100.0) if total > 0 else 0.0
+    other_pct = (other / total * 100.0) if total > 0 else 0.0
+
+    stats = {
+        "split": split_name,
+        "rows": total,
+        "fraud_rows": fraud,
+        "nonfraud_rows": nonfraud,
+        "other_rows": other,
+        "fraud_pct": fraud_pct,
+        "nonfraud_pct": nonfraud_pct,
+        "other_pct": other_pct,
+    }
+
+    print(
+        f"[{split_name}] rows={total:,} | fraud={fraud:,} ({fraud_pct:.4f}%) | "
+        f"nonfraud={nonfraud:,} ({nonfraud_pct:.4f}%) | other={other:,} ({other_pct:.4f}%)"
+    )
+    return stats
+
+
+def write_split_file(feat_df, labels, indices, split_name: str, run_tag: str, output_dir: str):
+    os.makedirs(output_dir, exist_ok=True)
+
+    idx_np = np.asarray(indices)
+    split_df = feat_df.iloc[idx_np].copy()
+    split_labels = labels.iloc[idx_np].copy()
+
+    split_df.insert(0, "node_id", idx_np)
+    split_df["Labels"] = split_labels.values
+
+    csv_path = os.path.join(output_dir, f"{run_tag}_{split_name}.csv")
+    split_df.to_csv(csv_path, index=False)
+
+    # Optional NPZ companion for faster reloads
+    npz_path = os.path.join(output_dir, f"{run_tag}_{split_name}.npz")
+    np.savez_compressed(
+        npz_path,
+        node_id=idx_np,
+        labels=split_labels.values,
+        features=split_df.drop(columns=["Labels"]).to_numpy()
+    )
+
+    stats = split_stats(split_labels.values, split_name)
+    stats["csv_path"] = csv_path
+    stats["npz_path"] = npz_path
+
+    print(f"[split saved] CSV → {csv_path}")
+    print(f"[split saved] NPZ → {npz_path}")
+
+    return stats, csv_path, npz_path
+
+
+def write_split_summary(stats_list, run_tag: str, output_dir: str):
+    os.makedirs(output_dir, exist_ok=True)
+
+    df = pd.DataFrame(stats_list)
+    csv_path = os.path.join(output_dir, f"{run_tag}_split_summary.csv")
+    json_path = os.path.join(output_dir, f"{run_tag}_split_summary.json")
+
+    df.to_csv(csv_path, index=False)
+    with open(json_path, "w") as f:
+        json.dump(stats_list, f, indent=2)
+
+    print(f"[summary saved] CSV  → {csv_path}")
+    print(f"[summary saved] JSON → {json_path}")
+
 def dump_metric_inputs(run_tag: str, y_true: np.ndarray, y_score: np.ndarray, y_pred: np.ndarray):
     os.makedirs("artifacts", exist_ok=True)
 
@@ -112,7 +190,42 @@ def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, e
     cat_feat = {col: torch.from_numpy(feat_df[col].values).long().to(
         device) for col in cat_features}
 
+    # ---------------------------------------------------------
+    # ✅ ADD YOUR BLOCK HERE (SAFE ZONE)
+    # ---------------------------------------------------------
+
+    run_tag = f"{args['method']}_{args['dataset']}"
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    artifacts_dir = os.path.join(BASE_DIR, "artifacts", run_tag)
+    os.makedirs(artifacts_dir, exist_ok=True)
+
+    # labels is still pandas here — GOOD
+    labels_series = labels.copy() if isinstance(labels, pd.Series) else pd.Series(labels)
+
+    train_stats, _, _ = write_split_file(
+        feat_df=feat_df,
+        labels=labels_series,
+        indices=train_idx,
+        split_name="outer_train",
+        run_tag=run_tag,
+        output_dir=artifacts_dir
+    )
+
+    test_stats, _, _ = write_split_file(
+        feat_df=feat_df,
+        labels=labels_series,
+        indices=test_idx,
+        split_name="outer_test",
+        run_tag=run_tag,
+        output_dir=artifacts_dir
+    )
+
+    write_split_summary([train_stats, test_stats], run_tag=run_tag, output_dir=artifacts_dir)
+
+    # ---------------------------------------------------------
+
     y = labels
+
     labels = torch.from_numpy(y.values).long().to(device)
     loss_fn = nn.CrossEntropyLoss().to(device)
     for fold, (trn_idx, val_idx) in enumerate(kfold.split(feat_df.iloc[train_idx], y_target)):
@@ -365,9 +478,12 @@ def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, e
     b_models, val_gnn_0, test_gnn_0 = earlystoper.best_model.to(
         'cpu'), oof_predictions, test_predictions
 
+    # Testing Data
     test_score = torch.softmax(test_gnn_0, dim=1)[test_idx, 1].cpu().numpy()
     y_target = labels[test_idx].cpu().numpy()
     test_score1 = torch.argmax(test_gnn_0, dim=1)[test_idx].cpu().numpy()
+
+    # test_gnn_0[i] = [nonfraud, fraud]
 
     # Print statement for debugging - check for presence of class 2 in test set
     print("Unique classes in test set before filtering:", np.unique(y_target))
