@@ -479,9 +479,17 @@ def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, e
         'cpu'), oof_predictions, test_predictions
 
     # Testing Data
+    # commented out for threshold test_score = torch.softmax(test_gnn_0, dim=1)[test_idx, 1].cpu().numpy()
+    # commented out for threshold y_target = labels[test_idx].cpu().numpy()
+    # commented out for thresholdtest_score1 = torch.argmax(test_gnn_0, dim=1)[test_idx].cpu().numpy()
+    
+    # Added .3 fraud threshold for test_score1
     test_score = torch.softmax(test_gnn_0, dim=1)[test_idx, 1].cpu().numpy()
     y_target = labels[test_idx].cpu().numpy()
-    test_score1 = torch.argmax(test_gnn_0, dim=1)[test_idx].cpu().numpy()
+
+    # 👇 ADD THIS
+    threshold = 0.30   # <-- start here (try 0.2–0.4)
+    test_score1 = (test_score > threshold).astype(int)
 
     # test_gnn_0[i] = [nonfraud, fraud]
 
