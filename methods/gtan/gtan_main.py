@@ -488,7 +488,7 @@ def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, e
     y_target = labels[test_idx].cpu().numpy()
 
     # New line of code for thresholding test_score1
-    threshold = 0.20   # <-- start here (try 0.2–0.4)
+    threshold = 0.30   # <-- start here (try 0.2–0.4)
     test_score1 = (test_score > threshold).astype(int)
 
     # This was always commented out
