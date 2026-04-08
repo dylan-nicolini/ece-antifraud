@@ -12,3 +12,4 @@ max_epochs: 15
 gated: True
 dataset: S-FFSD
 test_size: 0.4
+checkpoint_dir: "experiments/checkpoints"
