@@ -559,6 +559,9 @@ def parse_args() -> argparse.Namespace:
                    help="reinit (default): fresh embeddings for target vocab; "
                         "clamp: clip target IDs to training vocab bounds")
 
+    p.add_argument("--threshold", type=float, default=None,
+                   help="Fixed probability threshold. If not set, Youden's J is used.")
+
     # ── Inference
     g = p.add_argument_group("Inference")
     g.add_argument("--batch-size", type=int, default=1024)
@@ -706,7 +709,7 @@ def main():
     )
 
     # ── 10. Threshold + metrics ───────────────────────────────────────────────
-    threshold = youden_threshold(y_true, y_score)
+    threshold = args.threshold if args.threshold is not None else youden_threshold(y_true, y_score)
     metrics   = compute_metrics(y_true, y_score, threshold)
 
     # File tag encodes the full experiment context
