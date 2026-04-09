@@ -193,12 +193,11 @@ def build_graph(data: pd.DataFrame, edge_per_trans: int = EDGE_PER_TRANS) -> dgl
 
 def _dummy_ref_df(cat_cardinalities: Dict[str, int]) -> pd.DataFrame:
     """
-    Minimal DataFrame whose column maxima match what TransEmbedding expects:
-      max(df[col].unique()) + 1 == cardinality
-    Only used at model construction time, not for inference.
+    Minimal single-row DataFrame whose column values satisfy TransEmbedding's
+    embedding size calculation: max(df[col].unique()) + 1 == cardinality.
     """
     return pd.DataFrame({
-        col: list(range(card))
+        col: [card - 1]
         for col, card in cat_cardinalities.items()
     })
 
