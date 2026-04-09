@@ -1,4 +1,3 @@
-import json
 import numpy as np
 import dgl
 import torch
@@ -95,34 +94,6 @@ def write_split_summary(stats_list, run_tag: str, output_dir: str):
 
     print(f"[summary saved] CSV  → {csv_path}")
     print(f"[summary saved] JSON → {json_path}")
-
-def save_checkpoint(model, feat_df, cat_feat_dict, args, fold):
-    output_dir = args.get("checkpoint_dir")
-    if not output_dir:
-        return
-    os.makedirs(output_dir, exist_ok=True)
-    run_tag = f"{args['method']}_{args['dataset']}"
-    cat_cardinalities = {col: int(feat_df[col].max()) + 1 for col in cat_feat_dict.keys()}
-    meta = {
-        "run_tag": run_tag, "fold": fold,
-        "in_feats": int(feat_df.shape[1]),
-        "hid_dim": int(args["hid_dim"] // 4),
-        "n_layers": int(args["n_layers"]), "n_classes": 2,
-        "heads": [4] * int(args["n_layers"]),
-        "dropout": args["dropout"], "gated": bool(args["gated"]),
-        "cat_cols": list(cat_feat_dict.keys()),
-        "cat_cardinalities": cat_cardinalities,
-        "dataset": args["dataset"], "method": args["method"],
-        "feature_columns": list(feat_df.columns),
-    }
-    meta_path = os.path.join(output_dir, f"{run_tag}_fold{fold}_meta.json")
-    with open(meta_path, "w") as f:
-        json.dump(meta, f, indent=2)
-    pt_path = os.path.join(output_dir, f"{run_tag}_fold{fold}.pt")
-    torch.save(model.cpu().state_dict(), pt_path)
-    model.to(args["device"])
-    print(f"[checkpoint] fold {fold} → {pt_path}")
-    print(f"[checkpoint] meta     → {meta_path}")
 
 def dump_metric_inputs(run_tag: str, y_true: np.ndarray, y_score: np.ndarray, y_pred: np.ndarray):
     os.makedirs("artifacts", exist_ok=True)
@@ -467,7 +438,6 @@ def gtan_main(feat_df, graph, train_idx, test_idx, labels, args, cat_features, e
                 print("Early Stopping!")
                 break
         print("Best val_loss is: {:.7f}".format(earlystoper.best_cv))
-        save_checkpoint(earlystoper.best_model, feat_df, cat_feat, args, fold + 1)
         test_ind = torch.from_numpy(np.array(test_idx)).long().to(device)
         test_sampler = MultiLayerFullNeighborSampler(args['n_layers'])
         test_dataloader = NodeDataLoader(graph,

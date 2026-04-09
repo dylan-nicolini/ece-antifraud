@@ -173,12 +173,10 @@ def main(args):
     #     gtan_main(
     #         feat_data, g, train_idx, test_idx, labels, args, cat_features, experiment=experiment)
     elif args['method'] == 'gtan':
-        from methods.gtan.gtan_main import load_gtan_data
-        from run_gtan_with_checkpoints import make_checkpointing_gtan_main
+        from methods.gtan.gtan_main import gtan_main, load_gtan_data
         feat_data, labels, train_idx, test_idx, g, cat_features = load_gtan_data(
             args['dataset'], args['test_size'])
-        wrapped_gtan_main = make_checkpointing_gtan_main(args['checkpoint_dir'])
-        wrapped_gtan_main(
+        gtan_main(
             feat_data, g, train_idx, test_idx, labels, args, cat_features, experiment=experiment)
     elif args['method'] == 'rgtan':
         from methods.rgtan.rgtan_main import rgtan_main, loda_rgtan_data
