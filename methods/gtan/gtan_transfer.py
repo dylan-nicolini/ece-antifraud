@@ -253,13 +253,16 @@ def build_model(
         model.load_state_dict(state_dict, strict=True)
         print("[model] strict=True  — full weight transfer including embeddings")
     else:
-        result = model.load_state_dict(state_dict, strict=False)
+        # Remove embedding weights so size mismatches don't block loading
+        filtered = {
+            k: v for k, v in state_dict.items()
+            if "cat_table" not in k
+        }
+        result = model.load_state_dict(filtered, strict=False)
         print(f"[model] strict=False — GNN transfer, embeddings re-initialized")
         print(f"        missing keys    : {len(result.missing_keys)} "
               f"(embedding tables for {meta['cat_cols']})")
         print(f"        unexpected keys : {len(result.unexpected_keys)}")
-
-    return model.to(device).eval()
 
 
 # ── LPA subtensor (mirrors gtan_lpa.py, no package dependency needed) ─────────
