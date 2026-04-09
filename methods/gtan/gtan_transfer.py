@@ -264,7 +264,7 @@ def build_model(
               f"(embedding tables for {meta['cat_cols']})")
         print(f"        unexpected keys : {len(result.unexpected_keys)}")
 
-
+    return model.to(device).eval()
 # ── LPA subtensor (mirrors gtan_lpa.py, no package dependency needed) ─────────
 
 def load_lpa_subtensor(
